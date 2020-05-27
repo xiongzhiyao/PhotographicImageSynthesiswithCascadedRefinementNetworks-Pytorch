@@ -1,9 +1,10 @@
 import os,numpy as np
 from os.path import dirname, exists, join, splitext
 import json,scipy
+import imageio
 class Dataset(object):
     def __init__(self, dataset_name):
-        self.work_dir = dirname(os.path.realpath('__file__'))
+        self.work_dir = 'crn0'
         info_path = join(self.work_dir, 'datasets', dataset_name + '.json')
         with open(info_path, 'r') as fp:
             info = json.load(fp)
@@ -12,7 +13,7 @@ class Dataset(object):
 
 def get_semantic_map(path):
     dataset=Dataset('cityscapes')
-    semantic=scipy.misc.imread(path)
+    semantic=imageio.imread(path)
     tmp=np.zeros((semantic.shape[0],semantic.shape[1],dataset.palette.shape[0]),dtype=np.float32)
     for k in range(dataset.palette.shape[0]):
         tmp[:,:,k]=np.float32((semantic[:,:,0]==dataset.palette[k,0])&(semantic[:,:,1]==dataset.palette[k,1])&(semantic[:,:,2]==dataset.palette[k,2]))
