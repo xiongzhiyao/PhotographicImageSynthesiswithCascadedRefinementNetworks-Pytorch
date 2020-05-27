@@ -27,6 +27,7 @@ import json
 from skimage.transform import resize
 from torch.utils.data import Dataset, DataLoader
 from torch.nn import DataParallel
+import time
 
 plt.ion()   # interactive mode
 
@@ -621,14 +622,14 @@ class HoverDataset(Dataset):
         input_images = Variable(torch.from_numpy(img).float().permute(2, 0, 1))
 
         label_images = torch.cat((label_images1, (1-label_images1.sum(0)).unsqueeze(0)), 0)
-        input_images = input_images.cuda()
-        label_images = label_images.cuda()
+        # input_images = input_images.cuda()
+        # label_images = label_images.cuda()
     
         return label_images, input_images
 
-batch_size = len(gpu_ids)
-data_len = 5000
-hover_loader = DataLoader(dataset=HoverDataset(data_len), batch_size=batch_size, shuffle=True, drop_last=True)
+batch_size = len(gpu_ids) * 1
+data_len = 100000
+hover_loader = DataLoader(dataset=HoverDataset(data_len), batch_size=batch_size, shuffle=True, drop_last=True, num_workers=8)
 
 def training(M):
     res = 256
@@ -642,8 +643,15 @@ def training(M):
     
         print("New Epoch")
 
+
         for data in hover_loader:
+
+            a = time.time()
             label_images, input_images = data
+            label_images = label_images.cuda()
+            input_images = input_images.cuda(gpu_ids[-1])
+
+            b = time.time()
 
             #print(label_images.shape)
             if  label_images.shape[0] != batch_size or label_images.shape[1] != DIMENSION:
@@ -670,6 +678,7 @@ def training(M):
             optimizer.zero_grad()
             Generator = model(label_images)
             Loss = Net(input_images, Generator, label_images)
+            c = time.time()
 
             print(Loss.data)
             if len(gpu_ids) > 1:
@@ -678,20 +687,22 @@ def training(M):
             optimizer.step()
             M = 1
             running_loss += Loss.data.item()
-            print(epoch, c_t, Loss.data.item())
+            d = time.time()
+            print(epoch, c_t, Loss.data.item(), b-a, c-b, d-c)
 
+            if c_t % 1000 == 0:
+              Generator = Generator.permute(0, 2, 3, 1)
+              Generator = Generator.cpu()
+              Generator = Generator.data.numpy()
+              output = np.minimum(np.maximum(Generator, 0.0), 255.0)
+              scipy.misc.toimage(output[0, :, :, :], cmin=0, cmax=255).save(
+                  "crn0/vis/{}_{}_output_real.jpg".format(epoch, c_t))
+                  
         shuffle(l)
         # can replace the 2975 with c_t for generalization
         epoch_loss = running_loss / data_len
         print(epoch, epoch_loss)
-        if epoch % 2 == 0:
-            Generator = Generator.permute(0, 2, 3, 1)
-            Generator = Generator.cpu()
-            Generator = Generator.data.numpy()
-            output = np.minimum(np.maximum(Generator, 0.0), 255.0)
-            scipy.misc.toimage(output[0, :, :, :], cmin=0, cmax=255).save(
-                "%06d_output_real.jpg" % epoch)
-            torch.save(model.state_dict(), 'crn0/mynet_epoch{}_CRN.pth'.format(epoch))
+        torch.save(model.state_dict(), 'crn0/mynet_epoch{}_CRN.pth'.format(epoch))
         #epoch_acc = running_corrects / 2975.0
 
 #     return Loss
