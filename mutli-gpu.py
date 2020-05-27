@@ -3,7 +3,7 @@
 """
 Created on Wed Dec 13 11:45:23 2017
 
-@author: soumya
+@author: soumya, Tommy Xiong
 """
 
 from __future__ import print_function, division
@@ -537,37 +537,37 @@ def vggnet(pretrained=False, model_root=None, **kwargs):
             model_urls['alexnet'], model_root))
     return model
 
+if True: #make it false if it's slow or if you don't want to train
+    Net = vggnet(pretrained=False, model_root=None)
 
-Net = vggnet(pretrained=False, model_root=None)
+    Net = Net.cuda()
 
-Net = Net.cuda()
+    vgg_rawnet = scipy.io.loadmat('crn0/imagenet-vgg-verydeep-19.mat')
 
-vgg_rawnet = scipy.io.loadmat('crn0/imagenet-vgg-verydeep-19.mat')
+    vgg_layers = vgg_rawnet['layers'][0]
 
-vgg_layers = vgg_rawnet['layers'][0]
+    # Weight initialization according to the pretrained VGG Very deep 19 network Network weights
 
-# Weight initialization according to the pretrained VGG Very deep 19 network Network weights
+    layers = [0, 2, 5, 7, 10, 12, 14, 16, 19, 21, 23, 25, 28, 30, 32, 34]
 
-layers = [0, 2, 5, 7, 10, 12, 14, 16, 19, 21, 23, 25, 28, 30, 32, 34]
+    att = ['conv1', 'conv2', 'conv3', 'conv4', 'conv5', 'conv6', 'conv7', 'conv8',
+        'conv9', 'conv10', 'conv11', 'conv12', 'conv13', 'conv14', 'conv15', 'conv16']
 
-att = ['conv1', 'conv2', 'conv3', 'conv4', 'conv5', 'conv6', 'conv7', 'conv8',
-       'conv9', 'conv10', 'conv11', 'conv12', 'conv13', 'conv14', 'conv15', 'conv16']
+    S = [64, 64, 128, 128, 256, 256, 256, 256,
+        512, 512, 512, 512, 512, 512, 512, 512]
+    for L in range(16):
+        #    getattr(Net, att[L]).weight=nn.Parameter(torch.from_numpy(vgg_layers[layers[L]][0][0][2][0][0].reshape(S[L],-1,3,3)))
+        getattr(Net, att[L]).weight = nn.Parameter(torch.from_numpy(
+            vgg_layers[layers[L]][0][0][2][0][0]).permute(3, 2, 0, 1).cuda())
+        getattr(Net, att[L]).bias = nn.Parameter(torch.from_numpy(
+            vgg_layers[layers[L]][0][0][2][0][1]).view(S[L]).cuda())
 
-S = [64, 64, 128, 128, 256, 256, 256, 256,
-     512, 512, 512, 512, 512, 512, 512, 512]
-for L in range(16):
-    #    getattr(Net, att[L]).weight=nn.Parameter(torch.from_numpy(vgg_layers[layers[L]][0][0][2][0][0].reshape(S[L],-1,3,3)))
-    getattr(Net, att[L]).weight = nn.Parameter(torch.from_numpy(
-        vgg_layers[layers[L]][0][0][2][0][0]).permute(3, 2, 0, 1).cuda())
-    getattr(Net, att[L]).bias = nn.Parameter(torch.from_numpy(
-        vgg_layers[layers[L]][0][0][2][0][1]).view(S[L]).cuda())
+    gpu_num = torch.cuda.device_count()
+    gpu_ids = list(range(gpu_num))
+    print(gpu_ids)
 
-gpu_num = torch.cuda.device_count()
-gpu_ids = list(range(gpu_num))
-print(gpu_ids)
-
-Net.eval()
-Net = DataParallel(Net, gpu_ids)#, gpu_ids[-1])
+    Net.eval()
+    Net = DataParallel(Net, gpu_ids)#, gpu_ids[-1])
 
 # Till Now VGG19 pretrained network is ready
 
@@ -627,11 +627,12 @@ class HoverDataset(Dataset):
     
         return label_images, input_images
 
-batch_size = len(gpu_ids) * 1
-data_len = 100000
-hover_loader = DataLoader(dataset=HoverDataset(data_len), batch_size=batch_size, shuffle=True, drop_last=True, num_workers=8)
 
-def training(M):
+def training(M):    
+    batch_size = len(gpu_ids) * 1   
+    data_len = 100000
+    hover_loader = DataLoader(dataset=HoverDataset(data_len), batch_size=batch_size, shuffle=True, drop_last=True, num_workers=8)
+
     res = 256
 
     label_dir = 'crn0/Label256Full'
@@ -733,13 +734,56 @@ def testing(seman_in):
     result.save('torch-result.jpg')
     scipy.misc.toimage(output[2, :, :, :], cmin=0, cmax=255).save("val4.jpg")
 
+def infer():
+    import matplotlib.pyplot as plt
+    data_len = 20
+    res = 256
 
-mode = 'train'
+    test_loader = DataLoader(dataset=HoverDataset(data_len), batch_size=1)
+    for data in test_loader:
+        label_images, input_images = data
+        label_images = label_images.cuda()
+        input_images = input_images.cuda()
+
+        model = cascaded_model(label_images, res)
+        model = model.cuda()
+        model = DataParallel(model)
+        model.load_state_dict(torch.load('crn0/mynet_epoch6_CRN.pth'))
+        model = model.eval()
+        G = model(label_images)
+        Generator = G.permute(0, 2, 3, 1)
+        Generator = Generator
+        Generator = Generator.data.cpu().numpy()
+        output = np.minimum(np.maximum(Generator, 0.0), 255.0)
+        result = scipy.misc.toimage(output[2, :, :, :], cmin=0, cmax=255)
+        result = np.array(result)
+
+        label = label_images.squeeze().permute(1,2,0).cpu().numpy()
+        img = input_images.squeeze().permute(1,2,0).cpu().numpy().astype(int)
+        label_vis = np.zeros(label.shape[:2])
+        for i in range(label.shape[2]):
+            label_vis[label[:,:,i] == True] = i
+        
+        plt.figure()
+        plt.subplot(311)
+        plt.imshow(img)
+        plt.subplot(312)
+        plt.imshow(label_vis, cmap='tab20b')
+        plt.subplot(313)
+        plt.imshow(result)
+        plt.savefig("infer demo")
+        break
+
+mode = 'infer'
 
 if mode == 'train':
     M = 0
     model_ft = training(M)
     torch.save(model_ft.state_dict(), 'crn0/mynet_200epoch_CRN.pth')
+
+elif mode == 'infer':
+    infer()
+
 else:
     file_name = 'crn0/Label256Full/aachen_000000_000019_gtFine_color.png'
     testing(file_name)

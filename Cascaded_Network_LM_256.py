@@ -577,7 +577,7 @@ def training(M):
     for epoch in range(200):
         running_loss = 0
         c_t = 0
-        data_len = 10
+        data_len = 5000
         for ind in np.random.permutation(data_len):
             try:
                 d = data[ind]
